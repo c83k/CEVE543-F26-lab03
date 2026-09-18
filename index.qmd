@@ -121,7 +121,13 @@ $$
 $$
 
 ```{julia}
-# Your code here
+μ_prior = -3
+σ_prior = 5
+
+σ2_post = 1 / (n / σ_hat^2 + 1 / σ_prior^2)
+μ_post = σ2_post * (n * μ_hat / σ_hat^2 + μ_prior / σ_prior^2)
+
+@printf("Posterior: μ_post = %.2f °C, σ_post = %.2f °C", μ_post, sqrt(σ2_post))
 ```
 
 ### Bootstrap
@@ -129,7 +135,17 @@ $$
 Resample the $n$ annual minima with replacement, refit the Normal each time, and recompute the return period of the 2021 freeze.
 
 ```{julia}
-# Your code here
+μ_boot = Vector{Float64}(undef, B)
+σ_boot = Vector{Float64}(undef, B)
+T_boot = Vector{Float64}(undef, B)
+for b in 1:B
+    y_b = sample(rng, y, n; replace=true)
+    μ_boot[b] = mean(y_b)
+    σ_boot[b] = std(y_b)
+    p_b = cdf(Normal(μ_boot[b], σ_boot[b]), x_2021)
+    T_boot[b] = 1 / p_b
+end
+@printf("Bootstrap median return period: %.1f years", median(T_boot))
 ```
 
 ### Bayesian return period uncertainty
@@ -137,7 +153,14 @@ Resample the $n$ annual minima with replacement, refit the Normal each time, and
 Draw 5,000 samples of $\mu$ from the posterior and compute the return period for each.
 
 ```{julia}
-# Your code here
+μ_draws = rand(rng, Normal(μ_post, sqrt(σ2_post)), B)
+
+T_bayes = Vector{Float64}(undef, B)
+for b in 1:B
+    p_b = cdf(Normal(μ_draws[b], σ_hat), x_2021)
+    T_bayes[b] = 1 / p_b
+end
+@printf("Bayesian median return period: %.1f years", median(T_bayes))
 ```
 
 ### Return period plots with uncertainty
@@ -145,7 +168,32 @@ Draw 5,000 samples of $\mu$ from the posterior and compute the return period for
 Each gray line is one draw; the solid line is the MLE best fit.
 
 ```{julia}
-# Your code here
+n_show = 200
+mle_curve = quantile.(Normal(μ_hat, σ_hat), 1 ./ Ts)
+
+fig = Figure(; size=(900, 350))
+
+ax1 = Axis(fig[1, 1]; xscale=log10, xlabel="return period (years)",
+    ylabel="annual minimum temperature (°C)", title="Bootstrap")
+lines!(ax1, Ts, quantile.(Normal(μ_boot[1], σ_boot[1]), 1 ./ Ts); color=(:gray, 0.15), label="bootstrap draws")
+for b in 2:n_show
+    lines!(ax1, Ts, quantile.(Normal(μ_boot[b], σ_boot[b]), 1 ./ Ts); color=(:gray, 0.15))
+end
+lines!(ax1, Ts, mle_curve; color=colors[2], linewidth=2, label="MLE fit")
+scatter!(ax1, T_obs, y_sorted; color=colors[1], markersize=6, label="observed years")
+axislegend(ax1; position=:rt)
+
+ax2 = Axis(fig[1, 2]; xscale=log10, xlabel="return period (years)",
+    ylabel="annual minimum temperature (°C)", title="Bayesian")
+lines!(ax2, Ts, quantile.(Normal(μ_draws[1], σ_hat), 1 ./ Ts); color=(:gray, 0.15), label="Bayesian draws")
+for b in 2:n_show
+    lines!(ax2, Ts, quantile.(Normal(μ_draws[b], σ_hat), 1 ./ Ts); color=(:gray, 0.15))
+end
+lines!(ax2, Ts, mle_curve; color=colors[2], linewidth=2, label="MLE fit")
+scatter!(ax2, T_obs, y_sorted; color=colors[1], markersize=6, label="observed years")
+axislegend(ax2; position=:rt)
+
+fig
 ```
 
 ### Autocorrelation
@@ -179,8 +227,10 @@ Why are they so similar here, and when would you expect them to differ?
 # Your code here
 ```
 
-With 88 years of data the likelihood dominates the prior, so the posterior mean is nearly identical to the MLE.
-They would differ more with a stronger prior or a shorter record.
+The posterior mean (−4.33 °C) is almost the same as the MLE (−4.34 °C).
+This makes sense because the prior has a large standard deviation (5), so it is not very confident and carries little weight.
+With 88 years of data, the data carries far more weight than the prior, so the posterior ends up close to the MLE.
+They would differ more if the prior were stronger (a smaller σ_prior) or if we had a shorter record, since then the data would not dominate as much.
 
 :::
 
@@ -191,8 +241,21 @@ They would differ more with a stronger prior or a shorter record.
 ::: {.answer}
 
 ```{julia}
-# Your code here
+p50 = 1 / 50
+level_mle = quantile(Normal(μ_hat, σ_hat), p50)
+
+level_boot = quantile.(Normal.(μ_boot, σ_boot), p50)
+ci_boot = quantile(level_boot, [0.025, 0.975])
+
+level_bayes = quantile.(Normal.(μ_draws, σ_hat), p50)
+ci_bayes = quantile(level_bayes, [0.025, 0.975])
+
+@printf("MLE 50-year return level: %.2f °C", level_mle)
+@printf("Bootstrap 95%% interval: [%.2f, %.2f] °C", ci_boot[1], ci_boot[2])
+@printf("Bayesian 95%% interval: [%.2f, %.2f] °C", ci_bayes[1], ci_bayes[2])
 ```
+
+The MLE gives one best guess for the 50-year return level, but the bootstrap and Bayesian intervals show how much that guess could change given only 88 years of data.
 
 :::
 
@@ -205,12 +268,13 @@ Why might the coldest winters be colder than a Normal predicts?
 
 ::: {.answer}
 
-The Normal has thin tails: it assigns very low probability to values far from the mean.
-The coldest observed winters fall below the fitted curve, so the Normal underestimates the probability of extreme cold.
+In the return period plots, the coldest years (the blue dots) fall below both fitted curves once the return period is past about 20 to 30 years.
+This means the Normal model predicts these cold events should be rarer than they really are. Its tails are too thin to capture how cold the coldest years actually get.
 
-The coldest winters in Houston are driven by Arctic cold air outbreaks, a different physical process from the year-to-year variability that produces the bulk of the record.
-A Normal fitted to the whole record sees one population where the data contain two.
-Extreme value theory (week 4) provides distributions with heavier tails that can accommodate this.
+My guess is that ordinary winters and truly extreme ones like 2021 come from different processes.
+Normal year-to-year variation is likely just typical weather noise, but the most extreme cold snaps are probably caused by rare Arctic air outbreaks reaching into Texas. That is a different mechanism.
+Fitting one Normal to the whole record assumes it is all one process, when the data might actually contain two.
+This is the kind of situation extreme value theory (week 4) is designed for, since it uses distributions with heavier tails that do not underestimate the worst case.
 
 :::
 
@@ -223,12 +287,14 @@ Hint: think about what each method holds fixed and what it varies.
 
 ::: {.answer}
 
-The Bayesian approach here holds $\sigma$ fixed at $\hat\sigma$ and varies only $\mu$.
-The bootstrap refits both $\mu$ and $\sigma$ on each resample, so it picks up uncertainty in both parameters.
+The two methods do not account for the same sources of uncertainty.
+In our Bayesian setup, only $\mu$ varies. We drew 5,000 samples of $\mu$ from the posterior and kept $\sigma$ fixed at $\hat\sigma$ the whole time.
+The bootstrap refits both $\mu$ and $\sigma$ on every one of its 5,000 resamples.
 
-A resample that happens to include more cold years gets a larger $\hat\sigma$, which pushes the tail further.
-The Bayesian band is artificially narrow because it treats $\hat\sigma$ as known.
-A fuller Bayesian model that puts a prior on $\sigma$ as well would be wider and closer to the bootstrap.
+This matters because if a resample happens to include more cold years by chance, it does not just shift the mean. It also raises $\hat\sigma$, which stretches the tail of the fitted distribution further out.
+The bootstrap picks up that extra variability, but our Bayesian approach cannot, since we held $\sigma$ fixed by assumption.
+So the Bayesian interval ends up narrower than it probably should, simply because of how we set up the model (a prior only on $\mu$, not $\sigma$).
+If we had also put a prior on $\sigma$ and let it vary, I would expect the Bayesian band to widen and look more like the bootstrap's.
 
 :::
 
@@ -240,10 +306,15 @@ Give a point estimate and a plausible range, and explain in one or two sentences
 ::: {.answer}
 
 ```{julia}
-# Your code here
+ci_T_boot = quantile(T_boot, [0.025, 0.975])
+ci_T_bayes = quantile(T_bayes, [0.025, 0.975])
+
+@printf("MLE return period: %.1f years", T_mle)
+@printf("Bootstrap 95%% interval: [%.1f, %.1f] years", ci_T_boot[1], ci_T_boot[2])
+@printf("Bayesian 95%% interval: [%.1f, %.1f] years", ci_T_bayes[1], ci_T_bayes[2])
 ```
 
-The MLE says the 2021 freeze is roughly a once-in-several-decades event, but the confidence interval spans a wide range.
-The planner cannot distinguish "once in 20 years" from "once in 100 years" with this record and this model, and those two answers lead to very different decisions about infrastructure investment.
+The MLE says the 2021 freeze is roughly a 1-in-15-year event, but the 95% interval is wide: 8 to 36 years from the bootstrap, and 10 to 22 years from the Bayesian approach.
+The planner cannot tell the difference between "a fairly common cold snap" and "a rare multi-decade event" from this record and this model, and those two answers would lead to very different decisions about infrastructure spending.
 
 :::
